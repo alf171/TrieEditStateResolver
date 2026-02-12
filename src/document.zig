@@ -3,6 +3,8 @@ const Edit = @import("edit.zig");
 
 pub const Document = @This();
 
+const UUID_LENGTH = 16;
+
 const Node = union(enum) {
     nodes: std.StringHashMap(*Node),
     value: []const u8,
@@ -21,12 +23,22 @@ const Node = union(enum) {
 };
 
 root: *Node,
+/// document will own these for nows not json blob
+uuid: []u8,
+editCount: u64,
 
 pub fn init(alloc: std.mem.Allocator) !Document {
-    return .{ .root = try Node.initNodes(alloc) };
+    const uuid = try alloc.alloc(u8, UUID_LENGTH);
+    const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789";
+    for (uuid) |*ch| {
+        const idx = std.crypto.random.intRangeAtMost(u8, 0, alphabet.len - 1);
+        ch.* = alphabet[idx];
+    }
+    return .{ .root = try Node.initNodes(alloc), .uuid = uuid, .editCount = 0 };
 }
 
 pub fn free(self: Document, alloc: std.mem.Allocator) void {
+    alloc.free(self.uuid);
     freeNode(self.root, alloc);
 }
 
@@ -46,7 +58,10 @@ fn freeNode(node: *Node, alloc: std.mem.Allocator) void {
 }
 
 pub fn print(self: Document, writer: *std.io.Writer) !void {
+    try writer.print("{{\"id\":\"{s}\",", .{self.uuid});
+    try writer.print("\"editCount\":\"{d}\",\"data\":", .{self.editCount});
     try printNode(self.root, writer);
+    try writer.print("}}", .{});
 }
 
 fn printNode(node: *const Node, writer: *std.io.Writer) !void {
@@ -71,6 +86,7 @@ fn printNode(node: *const Node, writer: *std.io.Writer) !void {
 
 /// apply an edit onto a document
 pub fn applyEdit(self: *Document, edit: Edit, alloc: std.mem.Allocator) !void {
+    self.editCount += 1;
     for (edit.pathEdits) |pathEdit| {
         var parts = std.mem.splitSequence(u8, pathEdit.path, "/");
         var previous_nodes = &self.root.nodes;
