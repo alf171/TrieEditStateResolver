@@ -17,7 +17,7 @@ const Node = union(enum) {
 
     pub fn initLeaf(value: []const u8, alloc: std.mem.Allocator) !*Node {
         const node = try alloc.create(Node);
-        node.* = .{ .value = value };
+        node.* = .{ .value = try alloc.dupe(u8, value) };
         return node;
     }
 };
@@ -44,7 +44,9 @@ pub fn free(self: Document, alloc: std.mem.Allocator) void {
 
 fn freeNode(node: *Node, alloc: std.mem.Allocator) void {
     switch (node.*) {
-        .value => {},
+        .value => |v| {
+            alloc.free(v);
+        },
         .nodes => |*map| {
             var it = map.iterator();
             while (it.next()) |cur| {
@@ -98,6 +100,9 @@ pub fn applyEdit(self: *Document, edit: Edit, alloc: std.mem.Allocator) !void {
             const is_last = (next == null);
 
             if (is_last) {
+                if (previous_nodes.fetchRemove(part)) |removed| {
+                    freeNode(removed.value, alloc);
+                }
                 const leaf = try Node.initLeaf(pathEdit.value, alloc);
                 try previous_nodes.put(part, leaf);
                 break;
