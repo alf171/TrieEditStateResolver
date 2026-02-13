@@ -3,6 +3,7 @@ const PathEdit = @import("pathEdit.zig");
 const Edit = @import("edit.zig");
 const Document = @import("document.zig");
 const EditGenerator = @import("generator.zig");
+const Set = @import("set.zig");
 
 const Writer = std.io.Writer;
 
@@ -15,13 +16,8 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
 
-    // NOTE: write a utility to do this in a single line
-    var set = std.StringArrayHashMap(void).init(alloc);
+    var set = try Set.of(&.{ "a/b", "a/c", "a/d", "a/e" }, alloc);
     defer set.deinit();
-    try set.put("a/b", {});
-    try set.put("a/c", {});
-    try set.put("a/d", {});
-    try set.put("a/e", {});
 
     const config = EditGenerator{
         .batch_size = 10,
@@ -29,7 +25,7 @@ pub fn main() !void {
         .max_value_len = 20,
         .path_edits_per_edit = 2,
         .seed = 0,
-        .set_of_paths = set,
+        .set_of_paths = set.data,
     };
     const edits = try config.next_batch(alloc);
     var doc = try Document.init(alloc);
