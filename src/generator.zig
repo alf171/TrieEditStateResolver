@@ -18,10 +18,10 @@ max_value_len: u64,
 /// what paths to apply edits across
 set_of_paths: std.StringArrayHashMap(void),
 
-pub fn default_init(alloc: std.mem.Allocator) !EditGenerator {
+pub fn default_init(seed: u64, alloc: std.mem.Allocator) !*EditGenerator {
     const paths = try Set.of(&.{ "a/b", "a/c", "a/d", "a/e" }, alloc);
-    const seed = 0;
-    return EditGenerator{
+    const gen = try alloc.create(EditGenerator);
+    gen.* = EditGenerator{
         .batch_size = 10,
         .min_value_len = 10,
         .max_value_len = 20,
@@ -29,6 +29,12 @@ pub fn default_init(alloc: std.mem.Allocator) !EditGenerator {
         .prng = std.Random.DefaultPrng.init(seed),
         .set_of_paths = paths.data,
     };
+    return gen;
+}
+
+pub fn deinit(self: *EditGenerator, alloc: std.mem.Allocator) void {
+    self.set_of_paths.deinit();
+    alloc.destroy(self);
 }
 
 pub fn next_batch(self: *EditGenerator, alloc: std.mem.Allocator) ![]Edit {

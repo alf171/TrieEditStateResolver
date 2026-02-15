@@ -17,3 +17,10 @@ pub fn print(self: Edit, writer: *Writer) !void {
     }
     try writer.print("]}}", .{});
 }
+
+pub fn free(self: Edit, alloc: std.mem.Allocator) void {
+    for (self.pathEdits) |pathEdit| {
+        alloc.free(pathEdit.value);
+    }
+    alloc.free(self.pathEdits);
+}
