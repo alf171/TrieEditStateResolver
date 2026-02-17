@@ -44,9 +44,7 @@ pub fn push(self: *BatchQueue, batch: []const Edit) error{Closed}!void {
         self.condition.wait(&self.mutex);
     }
 
-    if (self.state.done) {
-        return error.Closed;
-    }
+    if (self.state.done) return error.Closed;
 
     self.queue[self.state.tail] = batch;
     self.state.tail = (self.state.tail + 1) % self.queue.len;
