@@ -42,23 +42,23 @@ pub fn runFn(ptr: *anyopaque, config: Config, alloc: std.mem.Allocator) anyerror
     const producer = struct {
         fn run(pqueue: *BatchQueue, database: *Database, total_batches: usize, fetch_ns: *std.atomic.Value(u64), palloc: std.mem.Allocator) !void {
             defer pqueue.close();
+            var t = try Timer.start();
             while (database.cursor < total_batches) {
-                var t = try Timer.start();
                 try pqueue.push(try database.nextPage(palloc));
-                _ = fetch_ns.fetchAdd(t.read(), .acquire);
             }
+            _ = fetch_ns.fetchAdd(t.read(), .acquire);
         }
     };
     const consumer = struct {
         fn run(pqueue: *BatchQueue, document: *Document, apply_ns: *std.atomic.Value(u64), calloc: std.mem.Allocator) !void {
             while (pqueue.pop()) |edits| {
+                var t = try Timer.start();
                 for (edits) |edit| {
-                    var t = try Timer.start();
                     try document.applyEdit(edit, calloc);
-                    _ = apply_ns.fetchAdd(t.read(), .monotonic);
                     edit.free(calloc);
                 }
                 calloc.free(edits);
+                _ = apply_ns.fetchAdd(t.read(), .monotonic);
             }
         }
     };

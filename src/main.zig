@@ -1,5 +1,4 @@
 const std = @import("std");
-const BatchQueue = @import("loadtest/batch_queue.zig");
 const PathEdit = @import("pathEdit.zig");
 const Edit = @import("edit.zig");
 const Document = @import("document.zig");
@@ -7,7 +6,6 @@ const EditGenerator = @import("generator.zig");
 const LoadTest = @import("loadtest/config.zig");
 const InMemory = @import("loadtest/in_memory.zig");
 const Pipeline = @import("loadtest/pipeline.zig");
-const Set = @import("set.zig");
 
 const Writer = std.io.Writer;
 
