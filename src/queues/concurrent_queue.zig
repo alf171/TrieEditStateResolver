@@ -2,12 +2,12 @@ const std = @import("std");
 
 const PathEdit = @import("../pathEdit.zig");
 const Edit = @import("../edit.zig");
-const ringBuffer = @import("ring_buffer.zig");
+const RingBuffer = @import("ring_buffer.zig").RingBuffer;
 
 pub const ConcurrentQueue = @This();
 const ns_per_ms = 1_000_000;
 
-queue: *ringBuffer.RingBuffer([]const Edit),
+queue: *RingBuffer([]const Edit),
 mutex: std.Thread.Mutex,
 condition: std.Thread.Condition,
 done: bool,
@@ -16,7 +16,7 @@ pub fn init(capacity: usize, alloc: std.mem.Allocator) !*ConcurrentQueue {
     const q = try alloc.create(ConcurrentQueue);
     errdefer alloc.destroy(q);
     q.* = ConcurrentQueue{
-        .queue = try ringBuffer.RingBuffer([]const Edit).init(capacity, alloc),
+        .queue = try RingBuffer([]const Edit).init(capacity, alloc),
         .mutex = .{},
         .condition = .{},
         .done = false,
