@@ -2,96 +2,83 @@ const std = @import("std");
 
 const PathEdit = @import("../pathEdit.zig");
 const Edit = @import("../edit.zig");
+const ringBuffer = @import("ring_buffer.zig");
 
-pub const BatchQueue = @This();
+pub const ConcurrentQueue = @This();
 const ns_per_ms = 1_000_000;
 
-queue: []?[]const Edit,
+queue: *ringBuffer.RingBuffer([]const Edit),
 mutex: std.Thread.Mutex,
 condition: std.Thread.Condition,
-state: struct {
-    head: usize,
-    tail: usize,
-    count: usize,
-    done: bool,
-},
+done: bool,
 
-pub fn init(capacity: usize, alloc: std.mem.Allocator) !*BatchQueue {
-    const q = try alloc.create(BatchQueue);
+pub fn init(capacity: usize, alloc: std.mem.Allocator) !*ConcurrentQueue {
+    const q = try alloc.create(ConcurrentQueue);
     errdefer alloc.destroy(q);
-    const queue = try alloc.alloc(?[]const Edit, capacity);
-    @memset(queue, null);
-    q.* = BatchQueue{
-        .queue = queue,
+    q.* = ConcurrentQueue{
+        .queue = try ringBuffer.RingBuffer([]const Edit).init(capacity, alloc),
         .mutex = .{},
         .condition = .{},
-        .state = .{ .head = 0, .tail = 0, .count = 0, .done = false },
+        .done = false,
     };
     return q;
 }
 
-pub fn deinit(self: *BatchQueue, alloc: std.mem.Allocator) void {
-    alloc.free(self.queue);
+pub fn deinit(self: *ConcurrentQueue, alloc: std.mem.Allocator) void {
+    self.queue.deinit(alloc);
+    // alloc.destroy(self.queue);
     alloc.destroy(self);
 }
 
 /// write at tail
-pub fn push(self: *BatchQueue, batch: []const Edit) error{Closed}!void {
+pub fn push(self: *ConcurrentQueue, batch: []const Edit) error{ Full, Closed }!void {
     self.mutex.lock();
     defer self.mutex.unlock();
 
-    while (self.state.count == self.queue.len and !self.state.done) {
+    while (self.queue.isFull() and !self.done) {
         self.condition.wait(&self.mutex);
     }
 
-    if (self.state.done) return error.Closed;
+    if (self.done) return error.Closed;
 
-    self.queue[self.state.tail] = batch;
-    self.state.tail = (self.state.tail + 1) % self.queue.len;
-    self.state.count += 1;
+    try self.queue.push(batch);
     self.condition.signal();
 }
 
 /// read from head
-pub fn pop(self: *BatchQueue) ?[]const Edit {
+pub fn pop(self: *ConcurrentQueue) ?[]const Edit {
     self.mutex.lock();
     defer self.mutex.unlock();
 
-    while (self.state.count == 0 and !self.state.done) {
+    while (self.queue.isEmpty() and !self.done) {
         self.condition.wait(&self.mutex);
     }
 
-    if (self.state.count == 0 and self.state.done) {
+    if (self.done and self.queue.isEmpty()) {
         return null;
     }
 
-    const edits = self.queue[self.state.head];
-    self.queue[self.state.head] = null;
-    if (edits == null) {
-        return null;
-    }
-    self.state.head = (self.state.head + 1) % self.queue.len;
-    self.state.count -= 1;
+    const edits = self.queue.pop();
     self.condition.signal();
     return edits;
 }
 
-pub fn close(self: *BatchQueue) void {
+pub fn close(self: *ConcurrentQueue) void {
     self.mutex.lock();
     defer self.mutex.unlock();
-    self.state.done = true;
+    self.done = true;
     self.condition.broadcast();
 }
 
 test "create queue" {
     const alloc = std.testing.allocator;
-    const q = try BatchQueue.init(16, alloc);
+    const q = try ConcurrentQueue.init(16, alloc);
     q.deinit(alloc);
 }
 
 test "single thread" {
     const alloc = std.testing.allocator;
-    const q = try BatchQueue.init(16, alloc);
+    const q = try ConcurrentQueue.init(16, alloc);
     defer q.deinit(alloc);
 
     const p1 = [_]PathEdit{.{ .path = "a", .value = "foobar" }};
@@ -123,16 +110,16 @@ test "single thread" {
 
 test "multi threading" {
     const alloc = std.testing.allocator;
-    const q = try BatchQueue.init(16, alloc);
+    const q = try ConcurrentQueue.init(16, alloc);
     defer q.deinit(alloc);
 
     const producer = struct {
-        fn run(self: *BatchQueue, batch: []const Edit) !void {
+        fn run(self: *ConcurrentQueue, batch: []const Edit) !void {
             try self.push(batch);
         }
     };
     const consumer = struct {
-        fn run(self: *BatchQueue, output: *?[]const Edit) void {
+        fn run(self: *ConcurrentQueue, output: *?[]const Edit) void {
             output.* = self.pop();
         }
     };
@@ -152,18 +139,18 @@ test "multi threading" {
 
 test "wake up" {
     const alloc = std.testing.allocator;
-    const q = try BatchQueue.init(16, alloc);
+    const q = try ConcurrentQueue.init(16, alloc);
     defer q.deinit(alloc);
     var started = std.atomic.Value(bool).init(false);
     var finished = std.atomic.Value(bool).init(false);
 
     const producer = struct {
-        fn run(self: *BatchQueue, batch: []const Edit) !void {
+        fn run(self: *ConcurrentQueue, batch: []const Edit) !void {
             try self.push(batch);
         }
     };
     const consumer = struct {
-        fn run(self: *BatchQueue, output: *?[]const Edit, started_flag: *std.atomic.Value(bool), finished_flag: *std.atomic.Value(bool)) void {
+        fn run(self: *ConcurrentQueue, output: *?[]const Edit, started_flag: *std.atomic.Value(bool), finished_flag: *std.atomic.Value(bool)) void {
             started_flag.store(true, .release);
             output.* = self.pop();
             finished_flag.store(true, .release);

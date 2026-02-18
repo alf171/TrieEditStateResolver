@@ -1,7 +1,7 @@
 const std = @import("std");
 
-const BatchQueue = @import("batch_queue.zig");
 const Config = @import("config.zig").Config;
+const ConcurrentQueue = @import("../queues/concurrent_queue.zig");
 const Database = @import("../database.zig");
 const Document = @import("../document.zig");
 const Edit = @import("../edit.zig");
@@ -16,7 +16,7 @@ pub const PipelineScenario = @This();
 
 document: Document,
 database: Database,
-queue: *BatchQueue,
+queue: *ConcurrentQueue,
 
 pub fn initFn(ptr: *anyopaque, config: Config, alloc: std.mem.Allocator) anyerror!void {
     const self: *PipelineScenario = @ptrCast(@alignCast(ptr));
@@ -33,14 +33,14 @@ pub fn initFn(ptr: *anyopaque, config: Config, alloc: std.mem.Allocator) anyerro
 
     self.database = Database.init(editGenerator, config.database_latency_ms);
     self.document = try Document.init(alloc);
-    self.queue = try BatchQueue.init(16, alloc);
+    self.queue = try ConcurrentQueue.init(16, alloc);
 }
 
 pub fn runFn(ptr: *anyopaque, config: Config, alloc: std.mem.Allocator) anyerror!Metrics {
     const self: *PipelineScenario = @ptrCast(@alignCast(ptr));
 
     const producer = struct {
-        fn run(pqueue: *BatchQueue, database: *Database, total_batches: usize, fetch_ns: *std.atomic.Value(u64), palloc: std.mem.Allocator) !void {
+        fn run(pqueue: *ConcurrentQueue, database: *Database, total_batches: usize, fetch_ns: *std.atomic.Value(u64), palloc: std.mem.Allocator) !void {
             defer pqueue.close();
             var t = try Timer.start();
             while (database.cursor < total_batches) {
@@ -50,7 +50,7 @@ pub fn runFn(ptr: *anyopaque, config: Config, alloc: std.mem.Allocator) anyerror
         }
     };
     const consumer = struct {
-        fn run(pqueue: *BatchQueue, document: *Document, apply_ns: *std.atomic.Value(u64), calloc: std.mem.Allocator) !void {
+        fn run(pqueue: *ConcurrentQueue, document: *Document, apply_ns: *std.atomic.Value(u64), calloc: std.mem.Allocator) !void {
             while (pqueue.pop()) |edits| {
                 var t = try Timer.start();
                 for (edits) |edit| {

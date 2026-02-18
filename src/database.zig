@@ -1,13 +1,29 @@
 const std = @import("std");
 const Edit = @import("edit.zig");
 const Generator = @import("generator.zig");
+
 // an simulated inmemory database
 pub const Database = @This();
+
+pub const PendingReq = struct {
+    token: u64,
+    ready_at_ns: i128,
+};
+
+pub const Completion = struct {
+    token: u64,
+    result: anyerror![]Edit,
+};
 
 database_latency_ms: u64,
 generator: *Generator,
 /// tells us where we are in batches
 cursor: u64,
+
+/// used for async only
+// pending: cannot run yet
+// ready_tasks: can run now
+// completed: work is done
 
 pub fn init(generator: *Generator, database_latency_ms: u64) Database {
     return .{ .generator = generator, .database_latency_ms = database_latency_ms, .cursor = 0 };
