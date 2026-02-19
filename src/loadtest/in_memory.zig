@@ -13,7 +13,7 @@ const ns_per_ms = 1_000_000;
 pub const InMemoryScenario = @This();
 
 document: Document,
-database: Database,
+database: *Database,
 
 pub fn initFn(ptr: *anyopaque, config: Config, alloc: std.mem.Allocator) anyerror!void {
     const self: *InMemoryScenario = @ptrCast(@alignCast(ptr));
@@ -28,7 +28,7 @@ pub fn initFn(ptr: *anyopaque, config: Config, alloc: std.mem.Allocator) anyerro
         .set_of_paths = paths.data,
     };
 
-    self.database = Database.init(editGenerator, config.database_latency_ms);
+    self.database = try Database.init(editGenerator, config.database_latency_ms, alloc);
     self.document = try Document.init(alloc);
 }
 
@@ -62,5 +62,6 @@ pub fn runFn(ptr: *anyopaque, config: Config, alloc: std.mem.Allocator) anyerror
 pub fn deinitFn(ptr: *anyopaque, alloc: std.mem.Allocator) void {
     const self: *InMemoryScenario = @ptrCast(@alignCast(ptr));
     self.database.generator.deinit(alloc);
+    self.database.deinit(alloc);
     self.document.free(alloc);
 }

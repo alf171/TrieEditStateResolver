@@ -3,15 +3,58 @@ const PathEdit = @import("pathEdit.zig");
 const Edit = @import("edit.zig");
 const Document = @import("document.zig");
 const EditGenerator = @import("generator.zig");
+
 const LoadTest = @import("loadtest/config.zig");
+const EventLoop = @import("loadtest/event_loop.zig");
 const InMemory = @import("loadtest/in_memory.zig");
 const Pipeline = @import("loadtest/pipeline.zig");
+const Set = @import("set.zig");
 
 const Writer = std.io.Writer;
 
 pub fn main() !void {
     try in_memory_load_test();
     try pipeline_load_test();
+    try eventloop_load_test();
+}
+
+fn eventloop_load_test() !void {
+    var stdout_buffer: [1024]u8 = undefined;
+    var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
+    const stdout = &stdout_writer.interface;
+    var stderr_buffer: [256]u8 = undefined;
+    var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
+    const stderr = &stderr_writer.interface;
+
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const alloc = gpa.allocator();
+    const config = LoadTest.Config{
+        .database_latency_ms = 5,
+        .total_batches = 50,
+        .database_batch_size = 100,
+        .scenario = .PIPELINE,
+        .seed = 0,
+    };
+
+    var scenario_impl = EventLoop{ .database = undefined, .document = undefined };
+    const scenario = LoadTest.Config.Scenario{
+        .ptr = &scenario_impl,
+        .initFn = EventLoop.initFn,
+        .runFn = EventLoop.runFn,
+        .deinitFn = EventLoop.deinitFn,
+    };
+
+    try scenario.init(config, alloc);
+    defer scenario.deinit(alloc);
+
+    const metrics = try scenario.run(config, alloc);
+    try scenario_impl.document.print(stdout);
+    try stdout.print("\n", .{});
+    try stdout.flush();
+    try stderr.print("[EVENTLOOP] total latency: {}ms, fetch latency {}ms, apply latency {}ms", .{ metrics.total_time_ms, metrics.fetch_latency_ms, metrics.apply_latency_ms });
+    try stderr.print("\n", .{});
+    try stderr.flush();
 }
 
 fn pipeline_load_test() !void {

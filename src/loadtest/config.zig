@@ -6,7 +6,7 @@ pub const Config = @This();
 database_batch_size: u64,
 total_batches: u64,
 database_latency_ms: u64,
-scenario: enum { IN_MEMORY, PIPELINE },
+scenario: enum { IN_MEMORY, PIPELINE, EVENT_LOOP },
 seed: u64,
 
 pub const Scenario = struct {

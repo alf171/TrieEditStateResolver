@@ -15,7 +15,7 @@ const ns_per_ms = 1_000_000;
 pub const PipelineScenario = @This();
 
 document: Document,
-database: Database,
+database: *Database,
 queue: *ConcurrentQueue,
 
 pub fn initFn(ptr: *anyopaque, config: Config, alloc: std.mem.Allocator) anyerror!void {
@@ -31,7 +31,7 @@ pub fn initFn(ptr: *anyopaque, config: Config, alloc: std.mem.Allocator) anyerro
         .set_of_paths = paths.data,
     };
 
-    self.database = Database.init(editGenerator, config.database_latency_ms);
+    self.database = try Database.init(editGenerator, config.database_latency_ms, alloc);
     self.document = try Document.init(alloc);
     self.queue = try ConcurrentQueue.init(16, alloc);
 }
@@ -66,7 +66,7 @@ pub fn runFn(ptr: *anyopaque, config: Config, alloc: std.mem.Allocator) anyerror
     var fetch_ns = std.atomic.Value(u64).init(0);
     var apply_ns = std.atomic.Value(u64).init(0);
 
-    const thread_producer = try std.Thread.spawn(.{ .allocator = alloc }, producer.run, .{ self.queue, &self.database, config.total_batches, &fetch_ns, alloc });
+    const thread_producer = try std.Thread.spawn(.{ .allocator = alloc }, producer.run, .{ self.queue, self.database, config.total_batches, &fetch_ns, alloc });
     const thread_consumer = try std.Thread.spawn(.{ .allocator = alloc }, consumer.run, .{ self.queue, &self.document, &apply_ns, alloc });
 
     thread_producer.join();
@@ -80,6 +80,7 @@ pub fn runFn(ptr: *anyopaque, config: Config, alloc: std.mem.Allocator) anyerror
 
 pub fn deinitFn(ptr: *anyopaque, alloc: std.mem.Allocator) void {
     const self: *PipelineScenario = @ptrCast(@alignCast(ptr));
+    self.database.deinit(alloc);
     self.database.generator.deinit(alloc);
     self.document.free(alloc);
     self.queue.deinit(alloc);

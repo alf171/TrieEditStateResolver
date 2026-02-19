@@ -80,4 +80,19 @@ test "single thread" {
     try std.testing.expectEqual("bar", e2);
 }
 
-// TODO: write test for done
+test "close queue" {
+    const alloc = std.testing.allocator;
+    const buffer = try NonBlockingQueue([]const u8).init(16, alloc);
+    defer buffer.deinit(alloc);
+
+    const item1: []const u8 = "foo";
+    const item2: []const u8 = "bar";
+
+    try buffer.push(item1);
+    buffer.close();
+    try std.testing.expectError(error.Closed, buffer.push(item2));
+
+    const e1 = buffer.pop() orelse return error.Failed;
+    try std.testing.expectEqualStrings("foo", e1);
+    try std.testing.expect(buffer.pop() == null);
+}
