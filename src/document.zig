@@ -1,5 +1,8 @@
 const std = @import("std");
 const Edit = @import("edit.zig");
+const PathEdit = @import("pathEdit.zig").PathEdit;
+const EditAction = @import("pathEdit.zig").EditAction;
+const PutStruct = @import("pathEdit.zig").PutStruct;
 
 pub const Document = @This();
 
@@ -87,44 +90,128 @@ fn printNode(node: *const Node, writer: *std.io.Writer) !void {
 }
 
 /// apply an edit onto a document
+/// does not consider timestamp atm
 pub fn applyEdit(self: *Document, edit: Edit, alloc: std.mem.Allocator) !void {
     self.editCount += 1;
     for (edit.pathEdits) |pathEdit| {
-        var parts = std.mem.splitSequence(u8, pathEdit.path, "/");
-        var previous_nodes = &self.root.nodes;
+        try switch (pathEdit) {
+            EditAction.PUT => |put| applyEditPut(self, put, alloc),
+            EditAction.DELETE => |del| applyEditDelete(self, del.path, alloc),
+        };
+    }
+}
 
-        var next_part = parts.next() orelse continue;
-        while (true) {
-            const part = next_part;
-            const next = parts.next();
-            const is_last = (next == null);
+fn applyEditDelete(self: *Document, path: []const u8, alloc: std.mem.Allocator) !void {
+    var parts = std.mem.splitSequence(u8, path, "/");
+    var previous_nodes = &self.root.nodes;
+    var next_part = parts.next() orelse return;
+    while (true) {
+        const part = next_part;
+        const next = parts.next();
+        const is_last = (next == null);
 
-            if (is_last) {
-                if (previous_nodes.fetchRemove(part)) |removed| {
-                    freeNode(removed.value, alloc);
-                }
-                const leaf = try Node.initLeaf(pathEdit.value, alloc);
-                try previous_nodes.put(part, leaf);
-                break;
+        if (is_last) {
+            if (previous_nodes.fetchRemove(part)) |removed| {
+                freeNode(removed.value, alloc);
             }
+            return;
+        }
 
-            const existing = previous_nodes.get(part);
-            if (existing) |ptr| {
-                switch (ptr.*) {
-                    .nodes => |*current_nodes| previous_nodes = current_nodes,
-                    .value => {
-                        freeNode(ptr, alloc);
-                        const new_node = try Node.initNodes(alloc);
-                        try previous_nodes.put(part, new_node);
-                        previous_nodes = &new_node.nodes;
-                    },
-                }
-            } else {
-                const child = try Node.initNodes(alloc);
-                try previous_nodes.put(part, child);
-                previous_nodes = &child.nodes;
+        const existing = previous_nodes.get(part) orelse return;
+        switch (existing.*) {
+            .nodes => |*current_nodes| previous_nodes = current_nodes,
+            .value => {
+                return;
+            },
+        }
+
+        next_part = next.?;
+    }
+}
+
+fn applyEditPut(self: *Document, pathEdit: PutStruct, alloc: std.mem.Allocator) !void {
+    var parts = std.mem.splitSequence(u8, pathEdit.path, "/");
+    var previous_nodes = &self.root.nodes;
+    var next_part = parts.next() orelse return;
+    while (true) {
+        const part = next_part;
+        const next = parts.next();
+        const is_last = (next == null);
+
+        if (is_last) {
+            if (previous_nodes.fetchRemove(part)) |removed| {
+                freeNode(removed.value, alloc);
             }
-            next_part = next.?;
+            const leaf = try Node.initLeaf(pathEdit.value, alloc);
+            try previous_nodes.put(part, leaf);
+            return;
+        }
+
+        const existing = previous_nodes.get(part);
+        if (existing) |ptr| {
+            switch (ptr.*) {
+                .nodes => |*current_nodes| previous_nodes = current_nodes,
+                .value => {
+                    freeNode(ptr, alloc);
+                    const new_node = try Node.initNodes(alloc);
+                    try previous_nodes.put(part, new_node);
+                    previous_nodes = &new_node.nodes;
+                },
+            }
+        } else {
+            const child = try Node.initNodes(alloc);
+            try previous_nodes.put(part, child);
+            previous_nodes = &child.nodes;
+        }
+        next_part = next.?;
+    }
+}
+
+pub fn get(self: *Document, path: []const u8) error{ NotFound, NotImplemented }![]const u8 {
+    var parts = std.mem.splitSequence(u8, path, "/");
+    var curBlob: *const Node = self.root;
+    while (parts.next()) |part| {
+        switch (curBlob.*) {
+            .nodes => |map| {
+                curBlob = map.get(part) orelse return error.NotFound;
+            },
+            .value => {},
         }
     }
+    return switch (curBlob.*) {
+        .nodes => error.NotImplemented,
+        .value => |value| value,
+    };
+}
+
+test "put edit on document" {
+    const alloc = std.testing.allocator;
+    var doc = try Document.init(alloc);
+    defer doc.free(alloc);
+
+    const pathEdits = [_]PathEdit{.{ .PUT = .{
+        .path = "a",
+        .value = "foo",
+    } }};
+    const edit = Edit{ .pathEdits = pathEdits[0..], .timestamp = 0 };
+    try doc.applyEdit(edit, alloc);
+    try std.testing.expectEqualSlices(u8, "foo", try doc.get("a"));
+}
+
+test "delete path from document" {
+    const alloc = std.testing.allocator;
+    var doc = try Document.init(alloc);
+    defer doc.free(alloc);
+
+    const pathEdits = [_]PathEdit{
+        .{ .PUT = .{ .path = "a", .value = "foo" } },
+    };
+    const deletePathEdits = [_]PathEdit{
+        .{ .DELETE = .{ .path = "a" } },
+    };
+    const addEdit = Edit{ .pathEdits = pathEdits[0..], .timestamp = 0 };
+    const removeEdit = Edit{ .pathEdits = deletePathEdits[0..], .timestamp = 1 };
+    try doc.applyEdit(addEdit, alloc);
+    try doc.applyEdit(removeEdit, alloc);
+    try std.testing.expectEqual(error.NotFound, doc.get("a"));
 }

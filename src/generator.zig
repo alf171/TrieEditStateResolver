@@ -1,6 +1,7 @@
 const std = @import("std");
 const Edit = @import("edit.zig");
-const PathEdit = @import("pathEdit.zig");
+const PathEdit = @import("pathEdit.zig").PathEdit;
+const EditAction = PathEdit.EditAction;
 const Set = @import("set.zig");
 
 /// assume we are generating edits for a single document
@@ -42,7 +43,7 @@ pub fn next_batch(self: *EditGenerator, alloc: std.mem.Allocator) ![]Edit {
     for (0..self.batch_size) |batch_index| {
         const pathEdits = try alloc.alloc(PathEdit, self.path_edits_per_edit);
         for (0..self.path_edits_per_edit) |path_edit_idx| {
-            const pathEdit = PathEdit{ .path = self.random_path(), .value = try self.random_value(alloc) };
+            const pathEdit = PathEdit{ .PUT = .{ .path = self.random_path(), .value = try self.random_value(alloc) } };
             pathEdits[@intCast(path_edit_idx)] = pathEdit;
         }
         edits[batch_index] = Edit{ .pathEdits = pathEdits, .timestamp = std.time.microTimestamp() };

@@ -1,6 +1,7 @@
 const std = @import("std");
 
-const PathEdit = @import("../pathEdit.zig");
+const PathEdit = @import("../pathEdit.zig").PathEdit;
+const EditAction = @import("../pathEdit.zig").EditAction;
 const Edit = @import("../edit.zig");
 const RingBuffer = @import("ring_buffer.zig").RingBuffer;
 
@@ -81,8 +82,14 @@ test "single thread" {
     const q = try ConcurrentQueue.init(16, alloc);
     defer q.deinit(alloc);
 
-    const p1 = [_]PathEdit{.{ .path = "a", .value = "foobar" }};
-    const p2 = [_]PathEdit{.{ .path = "b", .value = "foobar" }};
+    const p1 = [_]PathEdit{.{ .PUT = .{
+        .path = "a",
+        .value = "foobar",
+    } }};
+    const p2 = [_]PathEdit{.{ .PUT = .{
+        .path = "b",
+        .value = "foobar",
+    } }};
     const b1 = [_]Edit{.{
         .pathEdits = p1[0..],
         .timestamp = 1,
@@ -124,8 +131,11 @@ test "multi threading" {
         }
     };
 
-    const path_edits = [_]PathEdit{.{ .path = "a", .value = "foobar" }};
-    const batch = [_]Edit{.{ .pathEdits = path_edits[0..], .timestamp = 1 }};
+    const pathEdits = [_]PathEdit{.{ .PUT = .{
+        .path = "a",
+        .value = "foobar",
+    } }};
+    const batch = [_]Edit{.{ .pathEdits = pathEdits[0..], .timestamp = 1 }};
     const thread_producer = try std.Thread.spawn(.{ .allocator = alloc }, producer.run, .{ q, batch[0..] });
     var output: ?[]const Edit = null;
     const thread_consumer = try std.Thread.spawn(.{ .allocator = alloc }, consumer.run, .{ q, &output });
@@ -157,8 +167,13 @@ test "wake up" {
         }
     };
 
-    const path_edits = [_]PathEdit{.{ .path = "a", .value = "foobar" }};
-    const batch = [_]Edit{.{ .pathEdits = path_edits[0..], .timestamp = 1 }};
+    const pathEdits = [_]PathEdit{
+        .{ .PUT = .{
+            .path = "a",
+            .value = "foobar",
+        } },
+    };
+    const batch = [_]Edit{.{ .pathEdits = pathEdits[0..], .timestamp = 1 }};
     var output: ?[]const Edit = null;
     const thread_consumer = try std.Thread.spawn(.{ .allocator = alloc }, consumer.run, .{ q, &output, &started, &finished });
     std.Thread.sleep(10 * ns_per_ms);
