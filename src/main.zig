@@ -49,7 +49,7 @@ fn eventloop_load_test() !void {
     defer scenario.deinit(alloc);
 
     const metrics = try scenario.run(config, alloc);
-    try scenario_impl.document.print(stdout);
+    try scenario_impl.document.print(stdout, alloc);
     try stdout.print("\n", .{});
     try stdout.flush();
     try stderr.print("[EVENTLOOP] total latency: {}ms, fetch latency {}ms, apply latency {}ms", .{ metrics.total_time_ms, metrics.fetch_latency_ms, metrics.apply_latency_ms });
@@ -88,7 +88,7 @@ fn pipeline_load_test() !void {
     defer scenario.deinit(alloc);
 
     const metrics = try scenario.run(config, alloc);
-    try scenario_impl.document.print(stdout);
+    try scenario_impl.document.print(stdout, alloc);
     try stdout.print("\n", .{});
     try stdout.flush();
     try stderr.print("[PIPELINE] total latency: {}ms, fetch latency {}ms, apply latency {}ms", .{ metrics.total_time_ms, metrics.fetch_latency_ms, metrics.apply_latency_ms });
@@ -127,7 +127,7 @@ fn in_memory_load_test() !void {
     defer scenario.deinit(alloc);
 
     const metrics = try scenario.run(config, alloc);
-    try scenario_impl.document.print(stdout);
+    try scenario_impl.document.print(stdout, alloc);
     try stdout.print("\n", .{});
     try stdout.flush();
     try stderr.print("[IN_MEMORY] total latency: {}ms, fetch latency {}ms, apply latency {}ms", .{ metrics.total_time_ms, metrics.fetch_latency_ms, metrics.apply_latency_ms });
@@ -179,6 +179,6 @@ fn doc_example() !void {
         .timestamp = 0,
     };
     try doc.applyEdit(edit, alloc);
-    try doc.print(stdout);
+    try doc.print(stdout, alloc);
     try stdout.flush();
 }

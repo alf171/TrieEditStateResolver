@@ -32,7 +32,8 @@ pub fn initFn(ptr: *anyopaque, config: Config, alloc: std.mem.Allocator) anyerro
     };
 
     self.database = try Database.init(editGenerator, config.database_latency_ms, alloc);
-    self.document = try Document.init(alloc);
+    const timestamp = std.time.milliTimestamp();
+    self.document = try Document.init(timestamp, alloc);
     self.queue = try ConcurrentQueue.init(16, alloc);
 }
 
