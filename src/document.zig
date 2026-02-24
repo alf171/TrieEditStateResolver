@@ -177,6 +177,7 @@ fn applyEditPut(self: *Document, pathEdit: PutStruct, ts: i64, alloc: std.mem.Al
                     previous_nodes = children;
                 },
                 .value => {
+                    if (ptr.timestamp >= ts) return;
                     freeNode(ptr, alloc);
                     const new_node = try Node.initChildren(ts, alloc);
                     try previous_nodes.put(part, new_node);
@@ -265,4 +266,27 @@ test "timestamp clash" {
     try doc.applyEdit(edit3, alloc);
 
     try std.testing.expectEqualSlices(u8, "foo", try doc.get("a"));
+}
+
+test "broken case" {
+    const alloc = std.testing.allocator;
+    var doc = try Document.init(0, alloc);
+    defer doc.free(alloc);
+
+    const pe1 = [_]PathEdit{
+        .{ .DELETE = .{ .path = "a" } },
+    };
+
+    const pe2 = [_]PathEdit{
+        .{ .PUT = .{ .path = "a", .value = "foo" } },
+    };
+
+    const edit1 = Edit{ .pathEdits = pe1[0..], .timestamp = 1 };
+    const edit2 = Edit{ .pathEdits = pe2[0..], .timestamp = 0 };
+    try doc.applyEdit(edit1, alloc);
+    try doc.applyEdit(edit2, alloc);
+
+    // NOTE: this is wrong should be
+    try std.testing.expectEqualSlices(u8, "foo", try doc.get("a"));
+    // try std.testing.expectEqual(error.NotFound, doc.get("a"));
 }

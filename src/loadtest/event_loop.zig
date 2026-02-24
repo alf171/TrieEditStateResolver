@@ -1,4 +1,6 @@
 const std = @import("std");
+
+const ApplyEdits = @import("../apply_edits.zig");
 const Config = @import("config.zig").Config;
 const Database = @import("../database.zig");
 const Document = @import("../document.zig");
@@ -27,6 +29,8 @@ pub fn initFn(ptr: *anyopaque, config: Config, alloc: std.mem.Allocator) anyerro
         .path_edits_per_edit = 2,
         .prng = std.Random.DefaultPrng.init(config.seed),
         .set_of_paths = paths.data,
+        .timestamp_order = .RANDOM,
+        .actions = .PUT,
     };
     self.database = try Database.init(editGenerator, config.database_latency_ms, alloc);
     const timestamp = std.time.milliTimestamp();
@@ -56,11 +60,7 @@ pub fn runFn(ptr: *anyopaque, config: Config, alloc: std.mem.Allocator) anyerror
             }
         };
         const edits = try completion.result;
-        for (edits) |edit| {
-            try self.document.applyEdit(edit, alloc);
-            edit.free(alloc);
-        }
-        alloc.free(edits);
+        try ApplyEdits.apply(&self.document, edits, alloc, .SEQUENTIAL);
         completed += 1;
     }
     const total_time_ms = total_timer.read() / ns_per_ms;

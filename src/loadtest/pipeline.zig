@@ -1,5 +1,6 @@
 const std = @import("std");
 
+const ApplyEdits = @import("../apply_edits.zig");
 const Config = @import("config.zig").Config;
 const ConcurrentQueue = @import("../queues/concurrent_queue.zig");
 const Database = @import("../database.zig");
@@ -29,6 +30,8 @@ pub fn initFn(ptr: *anyopaque, config: Config, alloc: std.mem.Allocator) anyerro
         .path_edits_per_edit = 2,
         .prng = std.Random.DefaultPrng.init(config.seed),
         .set_of_paths = paths.data,
+        .timestamp_order = .RANDOM,
+        .actions = .PUT,
     };
 
     self.database = try Database.init(editGenerator, config.database_latency_ms, alloc);
@@ -54,11 +57,7 @@ pub fn runFn(ptr: *anyopaque, config: Config, alloc: std.mem.Allocator) anyerror
         fn run(pqueue: *ConcurrentQueue, document: *Document, apply_ns: *std.atomic.Value(u64), calloc: std.mem.Allocator) !void {
             while (pqueue.pop()) |edits| {
                 var t = try Timer.start();
-                for (edits) |edit| {
-                    try document.applyEdit(edit, calloc);
-                    edit.free(calloc);
-                }
-                calloc.free(edits);
+                try ApplyEdits.apply(document, edits, calloc, .SEQUENTIAL);
                 _ = apply_ns.fetchAdd(t.read(), .monotonic);
             }
         }

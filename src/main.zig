@@ -112,7 +112,7 @@ fn in_memory_load_test() !void {
         .total_batches = 50,
         .database_batch_size = 100,
         .scenario = .IN_MEMORY,
-        .seed = 0,
+        .seed = 2,
     };
 
     var scenario_impl = InMemory{ .database = undefined, .document = undefined };

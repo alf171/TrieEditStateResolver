@@ -1,5 +1,6 @@
 const std = @import("std");
 
+const ApplyEdits = @import("../apply_edits.zig");
 const Config = @import("config.zig").Config;
 const Database = @import("../database.zig");
 const Document = @import("../document.zig");
@@ -17,15 +18,17 @@ database: *Database,
 
 pub fn initFn(ptr: *anyopaque, config: Config, alloc: std.mem.Allocator) anyerror!void {
     const self: *InMemoryScenario = @ptrCast(@alignCast(ptr));
-    const paths = try Set.of(&.{ "a/b", "a/c", "a/d", "a/e" }, alloc);
+    const paths = try Set.of(&.{"a/b"}, alloc);
     const editGenerator = try alloc.create(Generator.EditGenerator);
     editGenerator.* = Generator.EditGenerator{
         .batch_size = config.database_batch_size,
         .min_value_len = 10,
         .max_value_len = 20,
-        .path_edits_per_edit = 2,
+        .path_edits_per_edit = 1,
         .prng = std.Random.DefaultPrng.init(config.seed),
         .set_of_paths = paths.data,
+        .timestamp_order = .IN_ORDER,
+        .actions = .PUT_AND_DELETE,
     };
 
     self.database = try Database.init(editGenerator, config.database_latency_ms, alloc);
@@ -46,12 +49,8 @@ pub fn runFn(ptr: *anyopaque, config: Config, alloc: std.mem.Allocator) anyerror
         fetch_ns += fetch_timer.read();
         // phase 2: apply edits
         var apply_timer = try Timer.start();
-        for (edits) |edit| {
-            try self.document.applyEdit(edit, alloc);
-            edit.free(alloc);
-        }
+        try ApplyEdits.apply(&self.document, edits, alloc, .SEQUENTIAL);
         apply_ns += apply_timer.read();
-        alloc.free(edits);
     }
     const total_time_ms = total_timer.read() / ns_per_ms;
     const fetch_latency_ms = fetch_ns / ns_per_ms;
