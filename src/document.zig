@@ -119,7 +119,6 @@ pub fn applyEdit(self: *Document, edit: Edit, alloc: std.mem.Allocator) !void {
 }
 
 fn applyEditDelete(self: *Document, path: []const u8, ts: i64, alloc: std.mem.Allocator) !void {
-    _ = ts;
     var parts = std.mem.splitSequence(u8, path, "/");
     var previous_nodes = &self.root.data.children;
     var next_part = parts.next() orelse return;
@@ -129,6 +128,9 @@ fn applyEditDelete(self: *Document, path: []const u8, ts: i64, alloc: std.mem.Al
         const is_last = (next == null);
 
         if (is_last) {
+            if (previous_nodes.get(part)) |cur| {
+                if (cur.timestamp >= ts) return;
+            }
             if (previous_nodes.fetchRemove(part)) |removed| {
                 freeNode(removed.value, alloc);
             }
@@ -157,8 +159,11 @@ fn applyEditPut(self: *Document, pathEdit: PutStruct, ts: i64, alloc: std.mem.Al
         const is_last = (next == null);
 
         if (is_last) {
-            if (previous_nodes.fetchRemove(part)) |removed| {
-                freeNode(removed.value, alloc);
+            if (previous_nodes.get(part)) |cur| {
+                if (cur.timestamp >= ts) return;
+                if (previous_nodes.fetchRemove(part)) |removed| {
+                    freeNode(removed.value, alloc);
+                }
             }
             const leaf = try Node.initValue(pathEdit.value, ts, alloc);
             try previous_nodes.put(part, leaf);
@@ -168,7 +173,9 @@ fn applyEditPut(self: *Document, pathEdit: PutStruct, ts: i64, alloc: std.mem.Al
         const existing = previous_nodes.get(part);
         if (existing) |ptr| {
             switch (ptr.*.data) {
-                .children => |*children| previous_nodes = children,
+                .children => |*children| {
+                    previous_nodes = children;
+                },
                 .value => {
                     freeNode(ptr, alloc);
                     const new_node = try Node.initChildren(ts, alloc);
@@ -234,4 +241,28 @@ test "delete path from document" {
     try doc.applyEdit(removeEdit, alloc);
     try std.testing.expectEqual(error.NotFound, doc.get("a"));
     try std.testing.expectEqual(1, doc.lastUpdatedTimestamp);
+}
+
+test "timestamp clash" {
+    const alloc = std.testing.allocator;
+    var doc = try Document.init(0, alloc);
+    defer doc.free(alloc);
+
+    const pe1 = [_]PathEdit{
+        .{ .PUT = .{ .path = "a", .value = "foo" } },
+    };
+    const pe2 = [_]PathEdit{
+        .{ .PUT = .{ .path = "a", .value = "bar" } },
+    };
+    const pe3 = [_]PathEdit{
+        .{ .DELETE = .{ .path = "a" } },
+    };
+    const edit1 = Edit{ .pathEdits = pe1[0..], .timestamp = 2 };
+    const edit2 = Edit{ .pathEdits = pe2[0..], .timestamp = 1 };
+    const edit3 = Edit{ .pathEdits = pe3[0..], .timestamp = 0 };
+    try doc.applyEdit(edit1, alloc);
+    try doc.applyEdit(edit2, alloc);
+    try doc.applyEdit(edit3, alloc);
+
+    try std.testing.expectEqualSlices(u8, "foo", try doc.get("a"));
 }
