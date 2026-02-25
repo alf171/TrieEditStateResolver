@@ -14,6 +14,7 @@ const Node = struct {
     data: union(enum) {
         children: std.StringHashMap(*Node),
         value: []u8,
+        tombstone: bool,
     },
 
     pub fn initChildren(ts: i64, alloc: std.mem.Allocator) !*Node {
@@ -29,6 +30,15 @@ const Node = struct {
         const node = try alloc.create(Node);
         node.* = .{
             .data = .{ .value = try alloc.dupe(u8, value) },
+            .timestamp = ts,
+        };
+        return node;
+    }
+
+    pub fn initTombstone(ts: i64, alloc: std.mem.Allocator) !*Node {
+        const node = try alloc.create(Node);
+        node.* = .{
+            .data = .{ .tombstone = true },
             .timestamp = ts,
         };
         return node;
@@ -69,6 +79,7 @@ fn freeNode(node: *Node, alloc: std.mem.Allocator) void {
         .value => |v| {
             alloc.free(v);
         },
+        .tombstone => {},
     }
     alloc.destroy(node);
 }
@@ -100,7 +111,17 @@ fn printNode(node: *const Node, writer: *std.io.Writer) !void {
             }
             try writer.print("}}", .{});
         },
+        .tombstone => return,
     }
+}
+
+pub fn toJson(node: *const Node, alloc: std.mem.Allocator) ![]u8 {
+    // _ = alloc;
+    var aw = std.io.Writer.Allocating.init(alloc);
+    defer aw.deinit();
+
+    try printNode(node, &aw.writer);
+    return try aw.toOwnedSlice();
 }
 
 /// apply an edit onto a document
@@ -130,19 +151,20 @@ fn applyEditDelete(self: *Document, path: []const u8, ts: i64, alloc: std.mem.Al
         if (is_last) {
             if (previous_nodes.get(part)) |cur| {
                 if (cur.timestamp >= ts) return;
+                if (previous_nodes.fetchRemove(part)) |removed| {
+                    freeNode(removed.value, alloc);
+                }
             }
-            if (previous_nodes.fetchRemove(part)) |removed| {
-                freeNode(removed.value, alloc);
-            }
+            const tombstone = try Node.initTombstone(ts, alloc);
+            try previous_nodes.put(part, tombstone);
             return;
         }
 
         const existing = previous_nodes.get(part) orelse return;
         switch (existing.*.data) {
             .children => |*children| previous_nodes = children,
-            .value => {
-                return;
-            },
+            .value => return,
+            .tombstone => return,
         }
 
         next_part = next.?;
@@ -183,6 +205,12 @@ fn applyEditPut(self: *Document, pathEdit: PutStruct, ts: i64, alloc: std.mem.Al
                     try previous_nodes.put(part, new_node);
                     previous_nodes = &new_node.data.children;
                 },
+                .tombstone => {
+                    if (ptr.timestamp >= ts) return;
+                    ptr.data = .{ .children = std.StringHashMap(*Node).init(alloc) };
+                    ptr.timestamp = ts;
+                    previous_nodes = &ptr.data.children;
+                },
             }
         } else {
             const child = try Node.initChildren(ts, alloc);
@@ -193,7 +221,8 @@ fn applyEditPut(self: *Document, pathEdit: PutStruct, ts: i64, alloc: std.mem.Al
     }
 }
 
-pub fn get(self: *Document, path: []const u8) error{ NotFound, NotImplemented }![]const u8 {
+/// ownership of string is given to caller
+pub fn get(self: *Document, path: []const u8, alloc: std.mem.Allocator) error{ NotFound, NotImplemented, OutOfMemory, WriteFailed }![]const u8 {
     var parts = std.mem.splitSequence(u8, path, "/");
     var curBlob: *const Node = self.root;
     while (parts.next()) |part| {
@@ -201,12 +230,16 @@ pub fn get(self: *Document, path: []const u8) error{ NotFound, NotImplemented }!
             .children => |map| {
                 curBlob = map.get(part) orelse return error.NotFound;
             },
-            .value => {},
+            .tombstone => return error.NotFound,
+            // get("a/b") on {"a"}
+            .value => return error.NotFound,
         }
     }
     return switch (curBlob.*.data) {
-        .children => error.NotImplemented,
-        .value => |value| value,
+        // get("a") on {"a/b/c"} => b: { c: v }
+        .children => try toJson(curBlob, alloc),
+        .value => |value| alloc.dupe(u8, value),
+        .tombstone => error.NotFound,
     };
 }
 
@@ -216,12 +249,17 @@ test "put edit on document" {
     defer doc.free(alloc);
 
     const pathEdits = [_]PathEdit{.{ .PUT = .{
-        .path = "a",
+        .path = "a/b",
         .value = "foo",
     } }};
     const edit = Edit{ .pathEdits = pathEdits[0..], .timestamp = 0 };
     try doc.applyEdit(edit, alloc);
-    try std.testing.expectEqualSlices(u8, "foo", try doc.get("a"));
+    const abstring = try doc.get("a/b", alloc);
+    defer alloc.free(abstring);
+    try std.testing.expectEqualStrings("foo", abstring);
+    const astring = try doc.get("a", alloc);
+    defer alloc.free(astring);
+    try std.testing.expectEqualStrings("{\"b\":\"foo\"}", astring);
     try std.testing.expectEqual(0, doc.root.timestamp);
 }
 
@@ -240,7 +278,7 @@ test "delete path from document" {
     const removeEdit = Edit{ .pathEdits = deletePathEdits[0..], .timestamp = 1 };
     try doc.applyEdit(addEdit, alloc);
     try doc.applyEdit(removeEdit, alloc);
-    try std.testing.expectEqual(error.NotFound, doc.get("a"));
+    try std.testing.expectError(error.NotFound, doc.get("a", alloc));
     try std.testing.expectEqual(1, doc.lastUpdatedTimestamp);
 }
 
@@ -265,10 +303,12 @@ test "timestamp clash" {
     try doc.applyEdit(edit2, alloc);
     try doc.applyEdit(edit3, alloc);
 
-    try std.testing.expectEqualSlices(u8, "foo", try doc.get("a"));
+    const astring = try doc.get("a", alloc);
+    defer alloc.free(astring);
+    try std.testing.expectEqualStrings("foo", astring);
 }
 
-test "broken case" {
+test "tombstone: newer delete first" {
     const alloc = std.testing.allocator;
     var doc = try Document.init(0, alloc);
     defer doc.free(alloc);
@@ -286,7 +326,72 @@ test "broken case" {
     try doc.applyEdit(edit1, alloc);
     try doc.applyEdit(edit2, alloc);
 
-    // NOTE: this is wrong should be
-    try std.testing.expectEqualSlices(u8, "foo", try doc.get("a"));
-    // try std.testing.expectEqual(error.NotFound, doc.get("a"));
+    try std.testing.expectError(error.NotFound, doc.get("a", alloc));
+}
+
+test "tombstone: ancestor deny" {
+    const alloc = std.testing.allocator;
+    var doc = try Document.init(0, alloc);
+    defer doc.free(alloc);
+
+    const pe1 = [_]PathEdit{
+        .{ .DELETE = .{ .path = "a" } },
+    };
+
+    const pe2 = [_]PathEdit{
+        .{ .PUT = .{ .path = "a/b", .value = "foo" } },
+    };
+
+    const edit1 = Edit{ .pathEdits = pe1[0..], .timestamp = 1 };
+    const edit2 = Edit{ .pathEdits = pe2[0..], .timestamp = 0 };
+    try doc.applyEdit(edit1, alloc);
+    try doc.applyEdit(edit2, alloc);
+
+    try std.testing.expectError(error.NotFound, doc.get("a/b", alloc));
+}
+
+test "tombstone: ancestor allow" {
+    const alloc = std.testing.allocator;
+    var doc = try Document.init(0, alloc);
+    defer doc.free(alloc);
+
+    const pe1 = [_]PathEdit{
+        .{ .DELETE = .{ .path = "a" } },
+    };
+
+    const pe2 = [_]PathEdit{
+        .{ .PUT = .{ .path = "a/b", .value = "foo" } },
+    };
+
+    const edit1 = Edit{ .pathEdits = pe1[0..], .timestamp = 0 };
+    const edit2 = Edit{ .pathEdits = pe2[0..], .timestamp = 1 };
+    try doc.applyEdit(edit1, alloc);
+    try doc.applyEdit(edit2, alloc);
+
+    const ab = try doc.get("a/b", alloc);
+    defer alloc.free(ab);
+    try std.testing.expectEqualStrings("foo", ab);
+}
+
+test "try to delete newer path" {
+    const alloc = std.testing.allocator;
+    var doc = try Document.init(0, alloc);
+    defer doc.free(alloc);
+
+    const pe1 = [_]PathEdit{
+        .{ .PUT = .{ .path = "a", .value = "foo" } },
+    };
+
+    const pe2 = [_]PathEdit{
+        .{ .DELETE = .{ .path = "a" } },
+    };
+
+    const edit1 = Edit{ .pathEdits = pe1[0..], .timestamp = 1 };
+    const edit2 = Edit{ .pathEdits = pe2[0..], .timestamp = 0 };
+    try doc.applyEdit(edit1, alloc);
+    try doc.applyEdit(edit2, alloc);
+
+    const a = try doc.get("a", alloc);
+    defer alloc.free(a);
+    try std.testing.expectEqualStrings("foo", a);
 }
