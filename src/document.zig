@@ -155,6 +155,7 @@ fn applyEditDelete(self: *Document, path: []const u8, ts: i64, alloc: std.mem.Al
             if (previous_nodes.get(part)) |cur| {
                 if (cur.timestamp >= ts) return;
                 if (previous_nodes.fetchRemove(part)) |removed| {
+                    // test case: "partial ancestor edit" - BUG HERE
                     freeNode(removed.value, alloc);
                 }
             }
@@ -187,6 +188,7 @@ fn applyEditPut(self: *Document, pathEdit: PutStruct, ts: i64, alloc: std.mem.Al
             if (previous_nodes.get(part)) |cur| {
                 if (cur.timestamp >= ts) return;
                 if (previous_nodes.fetchRemove(part)) |removed| {
+                    // test case: "partial ancestor edit" - BUG HERE
                     freeNode(removed.value, alloc);
                 }
             }
@@ -442,4 +444,41 @@ test "newer ancestor nested edit" {
     defer alloc.free(ab);
     try std.testing.expectEqualStrings("new", ab);
     try std.testing.expectError(error.NotFound, doc.get("a/c", alloc));
+}
+
+test "partial ancestor edit" {
+    const alloc = std.testing.allocator;
+    var doc = try Document.init(0, alloc);
+    defer doc.free(alloc);
+
+    const p1 = [_]PathEdit{pathEditPut("a", .{
+        .object = &[_]PathEditValue.Field{
+            .{ .key = "b", .value = .{ .string = "0" } },
+            .{ .key = "c", .value = .{ .string = "0" } },
+        },
+    })};
+    const p2 = [_]PathEdit{pathEditPut("a/d", .{ .string = "10" })};
+    const p3 = [_]PathEdit{pathEditPut("a", .{
+        .object = &[_]PathEditValue.Field{
+            .{ .key = "b", .value = .{ .string = "1" } },
+            .{ .key = "c", .value = .{ .string = "1" } },
+        },
+    })};
+
+    const edit1 = Edit{ .pathEdits = p1[0..], .timestamp = 1 };
+    const edit2 = Edit{ .pathEdits = p2[0..], .timestamp = 3 };
+    const edit3 = Edit{ .pathEdits = p3[0..], .timestamp = 2 };
+    try doc.applyEdit(edit1, alloc);
+    try doc.applyEdit(edit2, alloc);
+    try doc.applyEdit(edit3, alloc);
+
+    const ab = try doc.get("a/b", alloc);
+    defer alloc.free(ab);
+    try std.testing.expectEqualStrings("1", ab);
+    const ac = try doc.get("a/c", alloc);
+    defer alloc.free(ac);
+    try std.testing.expectEqualStrings("1", ac);
+    const ad = try doc.get("a/d", alloc);
+    defer alloc.free(ad);
+    try std.testing.expectEqualStrings("10", ad);
 }
