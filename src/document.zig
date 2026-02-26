@@ -2,8 +2,11 @@ const std = @import("std");
 const Time = @import("time.zig");
 const Edit = @import("edit.zig");
 const PathEdit = @import("pathEdit.zig").PathEdit;
+const PathEditValue = @import("pathEdit.zig").Value;
 const EditAction = @import("pathEdit.zig").EditAction;
 const PutStruct = @import("pathEdit.zig").PutStruct;
+const pathEditPut = @import("pathEdit.zig").initPut;
+const pathEditDelete = @import("pathEdit.zig").initDelete;
 
 pub const Document = @This();
 
@@ -187,8 +190,14 @@ fn applyEditPut(self: *Document, pathEdit: PutStruct, ts: i64, alloc: std.mem.Al
                     freeNode(removed.value, alloc);
                 }
             }
-            const leaf = try Node.initValue(pathEdit.value, ts, alloc);
-            try previous_nodes.put(part, leaf);
+            switch (pathEdit.value) {
+                .string => try buildChildren(pathEdit.value, previous_nodes, ts, part, alloc),
+                .object => {
+                    const child = try Node.initChildren(ts, alloc);
+                    try previous_nodes.put(part, child);
+                    try buildChildren(pathEdit.value, &child.data.children, ts, part, alloc);
+                },
+            }
             return;
         }
 
@@ -196,6 +205,7 @@ fn applyEditPut(self: *Document, pathEdit: PutStruct, ts: i64, alloc: std.mem.Al
         if (existing) |ptr| {
             switch (ptr.*.data) {
                 .children => |*children| {
+                    if (ptr.timestamp >= ts) return;
                     previous_nodes = children;
                 },
                 .value => {
@@ -218,6 +228,30 @@ fn applyEditPut(self: *Document, pathEdit: PutStruct, ts: i64, alloc: std.mem.Al
             previous_nodes = &child.data.children;
         }
         next_part = next.?;
+    }
+}
+
+fn buildChildren(edit: PathEditValue, node: *std.StringHashMap(*Node), ts: i64, path: []const u8, alloc: std.mem.Allocator) !void {
+    switch (edit) {
+        .string => |str| {
+            const leaf = try Node.initValue(str, ts, alloc);
+            try node.put(path, leaf);
+        },
+        .object => |fields| {
+            for (fields) |field| {
+                switch (field.value) {
+                    .string => |str| {
+                        const leaf = try Node.initValue(str, ts, alloc);
+                        try node.put(field.key, leaf);
+                    },
+                    .object => |_| {
+                        const child = try Node.initChildren(ts, alloc);
+                        try node.put(field.key, child);
+                        try buildChildren(field.value, &child.data.children, ts, field.key, alloc);
+                    },
+                }
+            }
+        },
     }
 }
 
@@ -248,18 +282,15 @@ test "put edit on document" {
     var doc = try Document.init(0, alloc);
     defer doc.free(alloc);
 
-    const pathEdits = [_]PathEdit{.{ .PUT = .{
-        .path = "a/b",
-        .value = "foo",
-    } }};
-    const edit = Edit{ .pathEdits = pathEdits[0..], .timestamp = 0 };
+    const p1 = [_]PathEdit{pathEditPut("a/b", .{ .string = "foo" })};
+    const edit = Edit{ .pathEdits = p1[0..], .timestamp = 0 };
     try doc.applyEdit(edit, alloc);
     const abstring = try doc.get("a/b", alloc);
     defer alloc.free(abstring);
     try std.testing.expectEqualStrings("foo", abstring);
-    const astring = try doc.get("a", alloc);
-    defer alloc.free(astring);
-    try std.testing.expectEqualStrings("{\"b\":\"foo\"}", astring);
+    const a = try doc.get("a", alloc);
+    defer alloc.free(a);
+    try std.testing.expectEqualStrings("{\"b\":\"foo\"}", a);
     try std.testing.expectEqual(0, doc.root.timestamp);
 }
 
@@ -268,14 +299,10 @@ test "delete path from document" {
     var doc = try Document.init(0, alloc);
     defer doc.free(alloc);
 
-    const pathEdits = [_]PathEdit{
-        .{ .PUT = .{ .path = "a", .value = "foo" } },
-    };
-    const deletePathEdits = [_]PathEdit{
-        .{ .DELETE = .{ .path = "a" } },
-    };
-    const addEdit = Edit{ .pathEdits = pathEdits[0..], .timestamp = 0 };
-    const removeEdit = Edit{ .pathEdits = deletePathEdits[0..], .timestamp = 1 };
+    const p1 = [_]PathEdit{pathEditPut("a", .{ .string = "foobar" })};
+    const p2 = [_]PathEdit{pathEditDelete("a")};
+    const addEdit = Edit{ .pathEdits = p1[0..], .timestamp = 0 };
+    const removeEdit = Edit{ .pathEdits = p2[0..], .timestamp = 1 };
     try doc.applyEdit(addEdit, alloc);
     try doc.applyEdit(removeEdit, alloc);
     try std.testing.expectError(error.NotFound, doc.get("a", alloc));
@@ -287,25 +314,19 @@ test "timestamp clash" {
     var doc = try Document.init(0, alloc);
     defer doc.free(alloc);
 
-    const pe1 = [_]PathEdit{
-        .{ .PUT = .{ .path = "a", .value = "foo" } },
-    };
-    const pe2 = [_]PathEdit{
-        .{ .PUT = .{ .path = "a", .value = "bar" } },
-    };
-    const pe3 = [_]PathEdit{
-        .{ .DELETE = .{ .path = "a" } },
-    };
-    const edit1 = Edit{ .pathEdits = pe1[0..], .timestamp = 2 };
-    const edit2 = Edit{ .pathEdits = pe2[0..], .timestamp = 1 };
-    const edit3 = Edit{ .pathEdits = pe3[0..], .timestamp = 0 };
+    const p1 = [_]PathEdit{pathEditPut("a", .{ .string = "foo" })};
+    const p2 = [_]PathEdit{pathEditPut("a", .{ .string = "bar" })};
+    const p3 = [_]PathEdit{pathEditDelete("a")};
+    const edit1 = Edit{ .pathEdits = p1[0..], .timestamp = 2 };
+    const edit2 = Edit{ .pathEdits = p2[0..], .timestamp = 1 };
+    const edit3 = Edit{ .pathEdits = p3[0..], .timestamp = 0 };
     try doc.applyEdit(edit1, alloc);
     try doc.applyEdit(edit2, alloc);
     try doc.applyEdit(edit3, alloc);
 
-    const astring = try doc.get("a", alloc);
-    defer alloc.free(astring);
-    try std.testing.expectEqualStrings("foo", astring);
+    const a = try doc.get("a", alloc);
+    defer alloc.free(a);
+    try std.testing.expectEqualStrings("foo", a);
 }
 
 test "tombstone: newer delete first" {
@@ -313,16 +334,11 @@ test "tombstone: newer delete first" {
     var doc = try Document.init(0, alloc);
     defer doc.free(alloc);
 
-    const pe1 = [_]PathEdit{
-        .{ .DELETE = .{ .path = "a" } },
-    };
+    const p1 = [_]PathEdit{pathEditDelete("a")};
+    const p2 = [_]PathEdit{pathEditPut("a", .{ .string = "foo" })};
 
-    const pe2 = [_]PathEdit{
-        .{ .PUT = .{ .path = "a", .value = "foo" } },
-    };
-
-    const edit1 = Edit{ .pathEdits = pe1[0..], .timestamp = 1 };
-    const edit2 = Edit{ .pathEdits = pe2[0..], .timestamp = 0 };
+    const edit1 = Edit{ .pathEdits = p1[0..], .timestamp = 1 };
+    const edit2 = Edit{ .pathEdits = p2[0..], .timestamp = 0 };
     try doc.applyEdit(edit1, alloc);
     try doc.applyEdit(edit2, alloc);
 
@@ -334,16 +350,11 @@ test "tombstone: ancestor deny" {
     var doc = try Document.init(0, alloc);
     defer doc.free(alloc);
 
-    const pe1 = [_]PathEdit{
-        .{ .DELETE = .{ .path = "a" } },
-    };
+    const p1 = [_]PathEdit{pathEditDelete("a")};
+    const p2 = [_]PathEdit{pathEditPut("a/b", .{ .string = "foo" })};
 
-    const pe2 = [_]PathEdit{
-        .{ .PUT = .{ .path = "a/b", .value = "foo" } },
-    };
-
-    const edit1 = Edit{ .pathEdits = pe1[0..], .timestamp = 1 };
-    const edit2 = Edit{ .pathEdits = pe2[0..], .timestamp = 0 };
+    const edit1 = Edit{ .pathEdits = p1[0..], .timestamp = 1 };
+    const edit2 = Edit{ .pathEdits = p2[0..], .timestamp = 0 };
     try doc.applyEdit(edit1, alloc);
     try doc.applyEdit(edit2, alloc);
 
@@ -355,16 +366,11 @@ test "tombstone: ancestor allow" {
     var doc = try Document.init(0, alloc);
     defer doc.free(alloc);
 
-    const pe1 = [_]PathEdit{
-        .{ .DELETE = .{ .path = "a" } },
-    };
+    const p1 = [_]PathEdit{pathEditDelete("a")};
+    const p2 = [_]PathEdit{pathEditPut("a/b", .{ .string = "foo" })};
 
-    const pe2 = [_]PathEdit{
-        .{ .PUT = .{ .path = "a/b", .value = "foo" } },
-    };
-
-    const edit1 = Edit{ .pathEdits = pe1[0..], .timestamp = 0 };
-    const edit2 = Edit{ .pathEdits = pe2[0..], .timestamp = 1 };
+    const edit1 = Edit{ .pathEdits = p1[0..], .timestamp = 0 };
+    const edit2 = Edit{ .pathEdits = p2[0..], .timestamp = 1 };
     try doc.applyEdit(edit1, alloc);
     try doc.applyEdit(edit2, alloc);
 
@@ -378,20 +384,62 @@ test "try to delete newer path" {
     var doc = try Document.init(0, alloc);
     defer doc.free(alloc);
 
-    const pe1 = [_]PathEdit{
-        .{ .PUT = .{ .path = "a", .value = "foo" } },
-    };
+    const p1 = [_]PathEdit{pathEditPut("a", .{ .string = "foo" })};
+    const p2 = [_]PathEdit{pathEditDelete("b")};
 
-    const pe2 = [_]PathEdit{
-        .{ .DELETE = .{ .path = "a" } },
-    };
-
-    const edit1 = Edit{ .pathEdits = pe1[0..], .timestamp = 1 };
-    const edit2 = Edit{ .pathEdits = pe2[0..], .timestamp = 0 };
+    const edit1 = Edit{ .pathEdits = p1[0..], .timestamp = 1 };
+    const edit2 = Edit{ .pathEdits = p2[0..], .timestamp = 0 };
     try doc.applyEdit(edit1, alloc);
     try doc.applyEdit(edit2, alloc);
 
     const a = try doc.get("a", alloc);
     defer alloc.free(a);
     try std.testing.expectEqualStrings("foo", a);
+}
+
+test "nested edit" {
+    const alloc = std.testing.allocator;
+    var doc = try Document.init(0, alloc);
+    defer doc.free(alloc);
+
+    const p1 = [_]PathEdit{pathEditPut("a", .{
+        .object = &[_]PathEditValue.Field{
+            .{ .key = "b", .value = .{ .string = "1" } },
+            .{ .key = "c", .value = .{ .string = "2" } },
+        },
+    })};
+    const p2 = [_]PathEdit{pathEditPut("a/b", .{ .string = "3" })};
+
+    const edit1 = Edit{ .pathEdits = p1[0..], .timestamp = 1 };
+    const edit2 = Edit{ .pathEdits = p2[0..], .timestamp = 0 };
+    try doc.applyEdit(edit1, alloc);
+    try doc.applyEdit(edit2, alloc);
+
+    const ab = try doc.get("a/b", alloc);
+    defer alloc.free(ab);
+    const ac = try doc.get("a/c", alloc);
+    defer alloc.free(ac);
+    try std.testing.expectEqualStrings("1", ab);
+    try std.testing.expectEqualStrings("2", ac);
+}
+
+test "newer ancestor nested edit" {
+    const alloc = std.testing.allocator;
+    var doc = try Document.init(0, alloc);
+    defer doc.free(alloc);
+    const p1 = [_]PathEdit{pathEditPut("a", .{
+        .object = &[_]PathEditValue.Field{
+            .{ .key = "b", .value = .{ .string = "new" } },
+        },
+    })};
+    const p2 = [_]PathEdit{pathEditPut("a/c", .{ .string = "old" })};
+    const edit1 = Edit{ .pathEdits = p1[0..], .timestamp = 1 };
+    const edit2 = Edit{ .pathEdits = p2[0..], .timestamp = 0 };
+    try doc.applyEdit(edit1, alloc);
+    try doc.applyEdit(edit2, alloc);
+
+    const ab = try doc.get("a/b", alloc);
+    defer alloc.free(ab);
+    try std.testing.expectEqualStrings("new", ab);
+    try std.testing.expectError(error.NotFound, doc.get("a/c", alloc));
 }

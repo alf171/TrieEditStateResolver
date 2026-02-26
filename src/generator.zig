@@ -1,6 +1,7 @@
 const std = @import("std");
 const Edit = @import("edit.zig");
 const PathEdit = @import("pathEdit.zig").PathEdit;
+const PathEditValue = @import("pathEdit.zig").Value;
 const EditAction = PathEdit.EditAction;
 const Set = @import("set.zig");
 
@@ -85,7 +86,7 @@ fn random_path(self: *EditGenerator) []const u8 {
     return keys[idx];
 }
 
-fn random_value(self: *EditGenerator, alloc: std.mem.Allocator) ![]const u8 {
+fn random_value(self: *EditGenerator, alloc: std.mem.Allocator) !PathEditValue {
     const random = self.prng.random();
     const length = random.intRangeAtMost(u64, self.min_value_len, self.max_value_len);
     const buf = try alloc.alloc(u8, length);
@@ -94,7 +95,7 @@ fn random_value(self: *EditGenerator, alloc: std.mem.Allocator) ![]const u8 {
         const idx = random.intRangeAtMost(u8, 0, alphabet.len - 1);
         ch.* = alphabet[idx];
     }
-    return buf;
+    return .{ .string = buf };
 }
 
 test "ordered edits" {

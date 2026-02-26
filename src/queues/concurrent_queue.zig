@@ -2,6 +2,7 @@ const std = @import("std");
 
 const PathEdit = @import("../pathEdit.zig").PathEdit;
 const EditAction = @import("../pathEdit.zig").EditAction;
+const pathEditPut = @import("../pathEdit.zig").initPut;
 const Edit = @import("../edit.zig");
 const RingBuffer = @import("ring_buffer.zig").RingBuffer;
 
@@ -27,7 +28,6 @@ pub fn init(capacity: usize, alloc: std.mem.Allocator) !*ConcurrentQueue {
 
 pub fn deinit(self: *ConcurrentQueue, alloc: std.mem.Allocator) void {
     self.queue.deinit(alloc);
-    // alloc.destroy(self.queue);
     alloc.destroy(self);
 }
 
@@ -82,14 +82,8 @@ test "single thread" {
     const q = try ConcurrentQueue.init(16, alloc);
     defer q.deinit(alloc);
 
-    const p1 = [_]PathEdit{.{ .PUT = .{
-        .path = "a",
-        .value = "foobar",
-    } }};
-    const p2 = [_]PathEdit{.{ .PUT = .{
-        .path = "b",
-        .value = "foobar",
-    } }};
+    const p1 = [_]PathEdit{pathEditPut("a", .{ .string = "foobar" })};
+    const p2 = [_]PathEdit{pathEditPut("b", .{ .string = "foobar" })};
     const b1 = [_]Edit{.{
         .pathEdits = p1[0..],
         .timestamp = 1,
@@ -131,10 +125,7 @@ test "multi threading" {
         }
     };
 
-    const pathEdits = [_]PathEdit{.{ .PUT = .{
-        .path = "a",
-        .value = "foobar",
-    } }};
+    const pathEdits = [_]PathEdit{pathEditPut("a", .{ .string = "foobar" })};
     const batch = [_]Edit{.{ .pathEdits = pathEdits[0..], .timestamp = 1 }};
     const thread_producer = try std.Thread.spawn(.{ .allocator = alloc }, producer.run, .{ q, batch[0..] });
     var output: ?[]const Edit = null;
@@ -167,12 +158,7 @@ test "wake up" {
         }
     };
 
-    const pathEdits = [_]PathEdit{
-        .{ .PUT = .{
-            .path = "a",
-            .value = "foobar",
-        } },
-    };
+    const pathEdits = [_]PathEdit{pathEditPut("a", .{ .string = "foobar" })};
     const batch = [_]Edit{.{ .pathEdits = pathEdits[0..], .timestamp = 1 }};
     var output: ?[]const Edit = null;
     const thread_consumer = try std.Thread.spawn(.{ .allocator = alloc }, consumer.run, .{ q, &output, &started, &finished });

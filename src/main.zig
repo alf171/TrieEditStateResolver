@@ -12,10 +12,21 @@ const Set = @import("set.zig");
 
 const Writer = std.io.Writer;
 
+// try in_memory_load_test();
+// try pipeline_load_test();
+// try eventloop_load_test();
 pub fn main() !void {
-    try in_memory_load_test();
-    try pipeline_load_test();
-    try eventloop_load_test();
+    var stdout_buffer: [1024]u8 = undefined;
+    var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
+    const stdout = &stdout_writer.interface;
+    const p = PathEdit.initPut("a", .{
+        .object = &[_]PathEdit.Value.Field{
+            .{ .key = "b", .value = .{ .string = "1" } },
+            .{ .key = "c", .value = .{ .string = "2" } },
+        },
+    });
+    try PathEdit.print(p, stdout);
+    try stdout.flush();
 }
 
 fn eventloop_load_test() !void {

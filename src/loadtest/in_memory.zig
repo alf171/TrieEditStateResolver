@@ -28,7 +28,7 @@ pub fn initFn(ptr: *anyopaque, config: Config, alloc: std.mem.Allocator) anyerro
         .prng = std.Random.DefaultPrng.init(config.seed),
         .set_of_paths = paths.data,
         .timestamp_order = .IN_ORDER,
-        .actions = .PUT_AND_DELETE,
+        .actions = .PUT,
     };
 
     self.database = try Database.init(editGenerator, config.database_latency_ms, alloc);
