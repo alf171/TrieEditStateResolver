@@ -11,7 +11,6 @@ const pathEditDelete = @import("pathEdit.zig").initDelete;
 pub const Document = @This();
 
 const UUID_LENGTH = 16;
-// TODO: implement a replace method instead of calling conditional remove & puts
 
 const Node = struct {
     timestamp: i64,
@@ -108,6 +107,7 @@ fn printNode(node: *const Node, writer: *std.io.Writer) !void {
             var it = map.iterator();
             var first = true;
             while (it.next()) |entry| {
+                if (entry.value_ptr.*.data == .tombstone) continue;
                 if (!first) try writer.print(",", .{});
                 first = false;
                 try writer.print("\"{s}\":", .{entry.key_ptr.*});
