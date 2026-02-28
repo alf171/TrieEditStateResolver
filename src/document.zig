@@ -11,6 +11,7 @@ const pathEditDelete = @import("pathEdit.zig").initDelete;
 pub const Document = @This();
 
 const UUID_LENGTH = 16;
+// TODO: implement a replace method instead of calling conditional remove & puts
 
 const Node = struct {
     timestamp: i64,
@@ -153,11 +154,9 @@ fn applyEditDelete(self: *Document, path: []const u8, ts: i64, alloc: std.mem.Al
 
         if (is_last) {
             if (previous_nodes.get(part)) |cur| {
-                if (cur.timestamp >= ts) return;
-                if (previous_nodes.fetchRemove(part)) |removed| {
-                    // test case: "partial ancestor edit" - BUG HERE
-                    freeNode(removed.value, alloc);
-                }
+                if (cur.timestamp > ts) return;
+                try teardownChildren(cur, ts, alloc);
+                return;
             }
             const tombstone = try Node.initTombstone(ts, alloc);
             try previous_nodes.put(part, tombstone);
@@ -186,18 +185,37 @@ fn applyEditPut(self: *Document, pathEdit: PutStruct, ts: i64, alloc: std.mem.Al
 
         if (is_last) {
             if (previous_nodes.get(part)) |cur| {
-                if (cur.timestamp >= ts) return;
-                if (previous_nodes.fetchRemove(part)) |removed| {
-                    // test case: "partial ancestor edit" - BUG HERE
-                    freeNode(removed.value, alloc);
-                }
+                if (cur.timestamp > ts) return;
+                try teardownChildren(cur, ts, alloc);
             }
             switch (pathEdit.value) {
                 .string => try buildChildren(pathEdit.value, previous_nodes, ts, part, alloc),
                 .object => {
-                    const child = try Node.initChildren(ts, alloc);
-                    try previous_nodes.put(part, child);
-                    try buildChildren(pathEdit.value, &child.data.children, ts, part, alloc);
+                    if (!previous_nodes.contains(part)) {
+                        const child = try Node.initChildren(ts, alloc);
+                        try previous_nodes.put(part, child);
+                        try buildChildren(pathEdit.value, &child.data.children, ts, part, alloc);
+                    } else {
+                        const cur = previous_nodes.get(part).?;
+                        switch (cur.data) {
+                            .children => |*children| try buildChildren(pathEdit.value, children, ts, part, alloc),
+                            .value => |v| {
+                                if (cur.timestamp > ts) return;
+                                alloc.free(v);
+                                // TODO: make this more modular like Node.initChildren(ts: i64, alloc: Allocator)
+                                cur.data = .{ .children = std.StringHashMap(*Node).init(alloc) };
+                                cur.timestamp = ts;
+                                try buildChildren(pathEdit.value, &cur.data.children, ts, part, alloc);
+                            },
+                            .tombstone => {
+                                if (cur.timestamp > ts) return;
+                                // TODO: make this more modular like Node.initChildren(ts: i64, alloc: Allocator)
+                                cur.data = .{ .children = std.StringHashMap(*Node).init(alloc) };
+                                cur.timestamp = ts;
+                                try buildChildren(pathEdit.value, &cur.data.children, ts, part, alloc);
+                            },
+                        }
+                    }
                 },
             }
             return;
@@ -207,18 +225,18 @@ fn applyEditPut(self: *Document, pathEdit: PutStruct, ts: i64, alloc: std.mem.Al
         if (existing) |ptr| {
             switch (ptr.*.data) {
                 .children => |*children| {
-                    if (ptr.timestamp >= ts) return;
+                    if (ptr.timestamp > ts) return;
                     previous_nodes = children;
                 },
                 .value => {
-                    if (ptr.timestamp >= ts) return;
+                    if (ptr.timestamp > ts) return;
                     freeNode(ptr, alloc);
                     const new_node = try Node.initChildren(ts, alloc);
                     try previous_nodes.put(part, new_node);
                     previous_nodes = &new_node.data.children;
                 },
                 .tombstone => {
-                    if (ptr.timestamp >= ts) return;
+                    if (ptr.timestamp > ts) return;
                     ptr.data = .{ .children = std.StringHashMap(*Node).init(alloc) };
                     ptr.timestamp = ts;
                     previous_nodes = &ptr.data.children;
@@ -233,28 +251,66 @@ fn applyEditPut(self: *Document, pathEdit: PutStruct, ts: i64, alloc: std.mem.Al
     }
 }
 
+fn teardownChildren(node: *Node, ts: i64, alloc: std.mem.Allocator) !void {
+    switch (node.data) {
+        .children => |*children| {
+            var it = children.iterator();
+            while (it.next()) |entry| {
+                try teardownChildren(entry.value_ptr.*, ts, alloc);
+            }
+            if (node.timestamp <= ts) node.timestamp = ts;
+        },
+        .tombstone => {
+            // can compact tombstone if n.timestamp <= ts
+            return;
+        },
+        .value => |v| {
+            if (node.timestamp > ts) return;
+            alloc.free(v);
+            node.data = .{ .tombstone = true };
+            node.timestamp = ts;
+        },
+    }
+}
+
 fn buildChildren(edit: PathEditValue, node: *std.StringHashMap(*Node), ts: i64, path: []const u8, alloc: std.mem.Allocator) !void {
     switch (edit) {
         .string => |str| {
+            if (node.get(path)) |cur| {
+                if (cur.timestamp > ts) return;
+            }
             const leaf = try Node.initValue(str, ts, alloc);
-            try node.put(path, leaf);
+            try replaceChildIfNewer(node, leaf, path, alloc);
         },
         .object => |fields| {
             for (fields) |field| {
                 switch (field.value) {
                     .string => |str| {
+                        if (node.get(field.key)) |cur| {
+                            if (cur.timestamp > ts) continue;
+                        }
                         const leaf = try Node.initValue(str, ts, alloc);
-                        try node.put(field.key, leaf);
+                        try replaceChildIfNewer(node, leaf, field.key, alloc);
                     },
                     .object => |_| {
+                        if (node.get(field.key)) |cur| {
+                            if (cur.timestamp > ts) continue;
+                        }
                         const child = try Node.initChildren(ts, alloc);
-                        try node.put(field.key, child);
+                        try replaceChildIfNewer(node, child, field.key, alloc);
                         try buildChildren(field.value, &child.data.children, ts, field.key, alloc);
                     },
                 }
             }
         },
     }
+}
+
+fn replaceChildIfNewer(map: *std.StringHashMap(*Node), new_node: *Node, path: []const u8, alloc: std.mem.Allocator) !void {
+    if (map.fetchRemove(path)) |removed| {
+        freeNode(removed.value, alloc);
+    }
+    try map.put(path, new_node);
 }
 
 /// ownership of string is given to caller
@@ -444,6 +500,86 @@ test "newer ancestor nested edit" {
     defer alloc.free(ab);
     try std.testing.expectEqualStrings("new", ab);
     try std.testing.expectError(error.NotFound, doc.get("a/c", alloc));
+}
+
+test "string -> object allow" {
+    const alloc = std.testing.allocator;
+    var doc = try Document.init(0, alloc);
+    defer doc.free(alloc);
+
+    const p1 = [_]PathEdit{pathEditPut("a", .{ .string = "old" })};
+    const p2 = [_]PathEdit{pathEditPut("a", .{
+        .object = &[_]PathEditValue.Field{
+            .{ .key = "b", .value = .{ .string = "new" } },
+        },
+    })};
+
+    try doc.applyEdit(Edit{ .pathEdits = p1[0..], .timestamp = 1 }, alloc);
+    try doc.applyEdit(Edit{ .pathEdits = p2[0..], .timestamp = 2 }, alloc);
+
+    const ab = try doc.get("a/b", alloc);
+    defer alloc.free(ab);
+    try std.testing.expectEqualStrings("new", ab);
+}
+
+test "string -> object deny" {
+    const alloc = std.testing.allocator;
+    var doc = try Document.init(0, alloc);
+    defer doc.free(alloc);
+
+    const p1 = [_]PathEdit{pathEditPut("a", .{ .string = "newer" })};
+    const p2 = [_]PathEdit{pathEditPut("a", .{
+        .object = &[_]PathEditValue.Field{
+            .{ .key = "b", .value = .{ .string = "older" } },
+        },
+    })};
+
+    try doc.applyEdit(Edit{ .pathEdits = p1[0..], .timestamp = 2 }, alloc);
+    try doc.applyEdit(Edit{ .pathEdits = p2[0..], .timestamp = 1 }, alloc);
+
+    const a = try doc.get("a", alloc);
+    defer alloc.free(a);
+    try std.testing.expectEqualStrings("newer", a);
+    try std.testing.expectError(error.NotFound, doc.get("a/b", alloc));
+}
+
+test "tombstone -> object allow" {
+    const alloc = std.testing.allocator;
+    var doc = try Document.init(0, alloc);
+    defer doc.free(alloc);
+
+    const del = [_]PathEdit{pathEditDelete("a")};
+    const put = [_]PathEdit{pathEditPut("a", .{
+        .object = &[_]PathEditValue.Field{
+            .{ .key = "b", .value = .{ .string = "alive" } },
+        },
+    })};
+
+    try doc.applyEdit(Edit{ .pathEdits = del[0..], .timestamp = 1 }, alloc);
+    try doc.applyEdit(Edit{ .pathEdits = put[0..], .timestamp = 2 }, alloc);
+
+    const ab = try doc.get("a/b", alloc);
+    defer alloc.free(ab);
+    try std.testing.expectEqualStrings("alive", ab);
+}
+
+test "tombstone -> object deny" {
+    const alloc = std.testing.allocator;
+    var doc = try Document.init(0, alloc);
+    defer doc.free(alloc);
+
+    const del = [_]PathEdit{pathEditDelete("a")};
+    const put = [_]PathEdit{pathEditPut("a", .{
+        .object = &[_]PathEditValue.Field{
+            .{ .key = "b", .value = .{ .string = "old" } },
+        },
+    })};
+
+    try doc.applyEdit(Edit{ .pathEdits = del[0..], .timestamp = 2 }, alloc);
+    try doc.applyEdit(Edit{ .pathEdits = put[0..], .timestamp = 1 }, alloc);
+
+    try std.testing.expectError(error.NotFound, doc.get("a", alloc));
+    try std.testing.expectError(error.NotFound, doc.get("a/b", alloc));
 }
 
 test "partial ancestor edit" {
