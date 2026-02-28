@@ -7,6 +7,7 @@ test {
     std.testing.refAllDecls(@import("database.zig"));
     std.testing.refAllDecls(@import("loadtest/event_loop.zig"));
     std.testing.refAllDecls(@import("document.zig"));
+    std.testing.refAllDecls(@import("locking_document.zig"));
     std.testing.refAllDecls(@import("pathEdit.zig"));
     std.testing.refAllDecls(@import("generator.zig"));
 }

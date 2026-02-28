@@ -27,7 +27,7 @@ pub fn initFn(ptr: *anyopaque, config: Config, alloc: std.mem.Allocator) anyerro
         .path_edits_per_edit = 1,
         .prng = std.Random.DefaultPrng.init(config.seed),
         .set_of_paths = paths.data,
-        .timestamp_order = .IN_ORDER,
+        .timestamp_order = .RANDOM,
         .actions = .PUT,
     };
 

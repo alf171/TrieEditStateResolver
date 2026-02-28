@@ -5,6 +5,7 @@ const Config = @import("config.zig").Config;
 const ConcurrentQueue = @import("../queues/concurrent_queue.zig");
 const Database = @import("../database.zig");
 const Document = @import("../document.zig");
+const LockingDocument = @import("../locking_document.zig");
 const Edit = @import("../edit.zig");
 const Generator = @import("../generator.zig");
 const Set = @import("../set.zig");
@@ -21,22 +22,23 @@ queue: *ConcurrentQueue,
 
 pub fn initFn(ptr: *anyopaque, config: Config, alloc: std.mem.Allocator) anyerror!void {
     const self: *PipelineScenario = @ptrCast(@alignCast(ptr));
-    const paths = try Set.of(&.{ "a/b", "a/c", "a/d", "a/e" }, alloc);
+    const paths = try Set.of(&.{ "a/b", "a/c", "a/d", "a/e", "1/2", "1/3", "1/4" }, alloc);
     const editGenerator = try alloc.create(Generator.EditGenerator);
     editGenerator.* = Generator.EditGenerator{
         .batch_size = config.database_batch_size,
         .min_value_len = 10,
         .max_value_len = 20,
-        .path_edits_per_edit = 2,
+        .path_edits_per_edit = 1,
         .prng = std.Random.DefaultPrng.init(config.seed),
         .set_of_paths = paths.data,
         .timestamp_order = .RANDOM,
-        .actions = .PUT,
+        .actions = .PUT_AND_DELETE,
     };
 
     self.database = try Database.init(editGenerator, config.database_latency_ms, alloc);
     const timestamp = std.time.milliTimestamp();
-    self.document = try Document.init(timestamp, alloc);
+    const DocType = @TypeOf(self.document);
+    self.document = try DocType.init(timestamp, alloc);
     self.queue = try ConcurrentQueue.init(16, alloc);
 }
 
@@ -54,7 +56,7 @@ pub fn runFn(ptr: *anyopaque, config: Config, alloc: std.mem.Allocator) anyerror
         }
     };
     const consumer = struct {
-        fn run(pqueue: *ConcurrentQueue, document: *Document, apply_ns: *std.atomic.Value(u64), calloc: std.mem.Allocator) !void {
+        fn run(pqueue: *ConcurrentQueue, document: *@TypeOf(self.document), apply_ns: *std.atomic.Value(u64), calloc: std.mem.Allocator) !void {
             while (pqueue.pop()) |edits| {
                 var t = try Timer.start();
                 try ApplyEdits.apply(document, edits, calloc, .SEQUENTIAL);

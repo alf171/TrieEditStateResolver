@@ -6,7 +6,7 @@ const Edit = @import("edit.zig");
 const Options = enum { SEQUENTIAL, CONCURRENT };
 
 /// aplies edits depending on options provided
-pub fn apply(document: *Document, edits: []const Edit, alloc: std.mem.Allocator, options: Options) !void {
+pub fn apply(document: anytype, edits: []Edit, alloc: std.mem.Allocator, options: Options) !void {
     switch (options) {
         .SEQUENTIAL => {
             for (edits) |edit| {

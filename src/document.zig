@@ -191,12 +191,7 @@ fn applyEditPut(self: *Document, pathEdit: PutStruct, ts: i64, alloc: std.mem.Al
             switch (pathEdit.value) {
                 .string => try buildChildren(pathEdit.value, previous_nodes, ts, part, alloc),
                 .object => {
-                    if (!previous_nodes.contains(part)) {
-                        const child = try Node.initChildren(ts, alloc);
-                        try previous_nodes.put(part, child);
-                        try buildChildren(pathEdit.value, &child.data.children, ts, part, alloc);
-                    } else {
-                        const cur = previous_nodes.get(part).?;
+                    if (previous_nodes.get(part)) |cur| {
                         switch (cur.data) {
                             .children => |*children| try buildChildren(pathEdit.value, children, ts, part, alloc),
                             .value => |v| {
@@ -215,6 +210,10 @@ fn applyEditPut(self: *Document, pathEdit: PutStruct, ts: i64, alloc: std.mem.Al
                                 try buildChildren(pathEdit.value, &cur.data.children, ts, part, alloc);
                             },
                         }
+                    } else {
+                        const child = try Node.initChildren(ts, alloc);
+                        try previous_nodes.put(part, child);
+                        try buildChildren(pathEdit.value, &child.data.children, ts, part, alloc);
                     }
                 },
             }

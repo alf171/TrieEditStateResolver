@@ -9,7 +9,7 @@ const RingBuffer = @import("ring_buffer.zig").RingBuffer;
 pub const ConcurrentQueue = @This();
 const ns_per_ms = 1_000_000;
 
-queue: *RingBuffer([]const Edit),
+queue: *RingBuffer([]Edit),
 mutex: std.Thread.Mutex,
 condition: std.Thread.Condition,
 done: bool,
@@ -18,7 +18,7 @@ pub fn init(capacity: usize, alloc: std.mem.Allocator) !*ConcurrentQueue {
     const q = try alloc.create(ConcurrentQueue);
     errdefer alloc.destroy(q);
     q.* = ConcurrentQueue{
-        .queue = try RingBuffer([]const Edit).init(capacity, alloc),
+        .queue = try RingBuffer([]Edit).init(capacity, alloc),
         .mutex = .{},
         .condition = .{},
         .done = false,
@@ -32,7 +32,7 @@ pub fn deinit(self: *ConcurrentQueue, alloc: std.mem.Allocator) void {
 }
 
 /// write at tail
-pub fn push(self: *ConcurrentQueue, batch: []const Edit) error{ Full, Closed }!void {
+pub fn push(self: *ConcurrentQueue, batch: []Edit) error{ Full, Closed }!void {
     self.mutex.lock();
     defer self.mutex.unlock();
 
@@ -47,7 +47,7 @@ pub fn push(self: *ConcurrentQueue, batch: []const Edit) error{ Full, Closed }!v
 }
 
 /// read from head
-pub fn pop(self: *ConcurrentQueue) ?[]const Edit {
+pub fn pop(self: *ConcurrentQueue) ?[]Edit {
     self.mutex.lock();
     defer self.mutex.unlock();
 
